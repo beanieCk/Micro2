@@ -30,12 +30,12 @@ double vReal[SAMPLES];
 double vImag[SAMPLES];
 
 int fanSpeed = 0; // 0 = Off, 1 = Half, 2 = 3/4, 3 = Full
-bool clockwise = true;
+bool clockwise = true; // Default direction is clockwise
 const char *speedLevels[] = {"0", "1/2", "3/4", "Full"};
-volatile bool updateDisplay = false;
-
 volatile bool buttonPressed = false; // Flag for button press
 volatile unsigned long lastButtonPress = 0; // Time of last button press
+volatile bool updateDisplay = false;
+unsigned long lastConsoleUpdate = 0; // Track last console update time
 
 void setup() {
   pinMode(MOTOR_INPUT1, OUTPUT);
@@ -49,7 +49,9 @@ void setup() {
   lcd.begin(16, 2);
 
   if (!rtc.begin()) {
-    lcd.print("RTC Error!");
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("RTC Error!       ");
     while (1);
   }
   if (!rtc.isrunning()) {
@@ -64,30 +66,29 @@ void setup() {
 
   // Initial LCD Message
   lcd.clear();
-  lcd.print("Initializing...");
+  lcd.setCursor(0, 0);
+  lcd.print("Initializing...  ");
   delay(1000);
 
-  // Set initial fan state
-  controlMotor();
-  updateLCD();
+  // Transition to main display
+  lcd.clear();
+  updateTimeOnLCD();
+  updateFanStatusOnLCD();
 }
 
 void loop() {
-  // Handle button press
+  // Handle button press for direction change
   if (buttonPressed) {
-    buttonPressed = false; // Reset flag
+    buttonPressed = false; // Reset the flag
 
     // Toggle fan direction
     clockwise = !clockwise;
-    Serial.print("Fan Direction Changed to: ");
-    Serial.println(clockwise ? "Clockwise" : "Counterclockwise");
 
-    // Update motor and LCD
+    // Update motor control
     controlMotor();
-    updateLCD();
 
-    // Delay to allow motor stabilization
-    delay(300);
+    // Update fan status (direction and speed) on LCD
+    updateFanStatusOnLCD();
   }
 
   // Sound Sampling for FFT
@@ -107,19 +108,26 @@ void loop() {
   // Match updated C4 (474.10–563.25 Hz) or A4 (669.65–684.35 Hz)
   if (peak >= 474.10 && peak <= 563.25) { // C4
     fanSpeed = min(fanSpeed + 1, 3); // Increase speed
-    updateDisplay = true;
+    updateFanStatusOnLCD();
   } else if (peak >= 669.65 && peak <= 684.35) { // A4
     fanSpeed = max(fanSpeed - 1, 0); // Decrease speed
-    updateDisplay = true;
+    updateFanStatusOnLCD();
   }
 
   // Update Fan Control
   controlMotor();
 
-  // Update Display Every Second
+  // Update Time Every Second
   if (updateDisplay) {
     updateDisplay = false;
-    updateLCD();
+    updateTimeOnLCD();
+  }
+
+  // Update the console once every second
+  unsigned long currentTime = millis();
+  if (currentTime - lastConsoleUpdate >= 1000) { // 1-second interval
+    lastConsoleUpdate = currentTime;
+    printConsoleStatus(); // Print fan status to the console
   }
 }
 
@@ -129,26 +137,26 @@ void controlMotor() {
     digitalWrite(MOTOR_INPUT2, LOW);
     analogWrite(MOTOR_ENABLE_PIN, 0); // Stop motor
   } else {
+    // Set motor direction
     digitalWrite(MOTOR_INPUT1, clockwise ? HIGH : LOW);
     digitalWrite(MOTOR_INPUT2, clockwise ? LOW : HIGH);
     int pwmValue = (fanSpeed == 1) ? 128 : (fanSpeed == 2) ? 192 : 255;
-    analogWrite(MOTOR_ENABLE_PIN, pwmValue); // Adjust speed
+    analogWrite(MOTOR_ENABLE_PIN, pwmValue);
   }
 }
 
 void buttonISR() {
   unsigned long currentTime = millis();
 
-  // Debounce: Ignore if the button was pressed recently
-  if (currentTime - lastButtonPress > 300) {
+  // Debounce logic
+  if (currentTime - lastButtonPress > 300) { // Ignore if pressed recently
     buttonPressed = true; // Set flag for button press
     lastButtonPress = currentTime; // Update last press time
   }
 }
 
-void updateLCD() {
-  lcd.clear(); // Clear the LCD before updating
-
+// Function to update only the time on the LCD
+void updateTimeOnLCD() {
   DateTime now = rtc.now();
   lcd.setCursor(0, 0);
   lcd.print(now.hour(), DEC);
@@ -156,14 +164,24 @@ void updateLCD() {
   lcd.print(now.minute(), DEC);
   lcd.print(":");
   lcd.print(now.second(), DEC);
+  lcd.print("     "); // Clear any leftover characters
+}
 
+// Function to update both fan direction and speed on the LCD
+void updateFanStatusOnLCD() {
   lcd.setCursor(0, 1);
-  lcd.print(clockwise ? "C" : "CC");
+  lcd.print(clockwise ? "C" : "CC"); // Update direction
   lcd.print(" ");
-  lcd.print(speedLevels[fanSpeed]);
+  lcd.print(speedLevels[fanSpeed]); // Update speed
+  lcd.print("     "); // Clear any leftover characters
+}
 
-  // Small delay to ensure LCD stability
-  delay(50);
+// Function to print fan status to the console
+void printConsoleStatus() {
+  Serial.print("Fan Direction: ");
+  Serial.println(clockwise ? "Clockwise" : "Counterclockwise");
+  Serial.print("Fan Speed: ");
+  Serial.println(speedLevels[fanSpeed]);
 }
 
 void timerISR() {
